@@ -255,12 +255,26 @@ toolchain_check() {
     if [[ "${toolchain_name}" == "clang" ]]; then
         # Install LLVM
         echo -e "${INFO} Start installing the LLVM toolchain..."
-        sudo apt-get -qq install -y lsb-release software-properties-common gnupg
-        curl -fsSL https://apt.llvm.org/llvm.sh | sudo bash -s all
-        [[ "${?}" -eq "0" ]] || error_msg "LLVM installation failed."
+        llvm_release_url="https://github.com/xmyts/amlogic-s9xxx-openwrt/releases/download/llvm-14.0.6/llvm-toolchain-14.0.6-aarch64.tar.xz"
+        llvm_tar_file="llvm-toolchain-14.0.6-aarch64.tar.xz"
+        llvm_install_dir="/usr/local/llvm"
+
+        # Create the installation directory if it doesn't exist
+        [[ -d "${llvm_install_dir}" ]] || mkdir -p ${llvm_install_dir}
+
+        # Download the LLVM toolchain. If it fails, wait 1 minute and try again, try 10 times.
+        for i in {1..10}; do
+            curl -fsSL "${llvm_release_url}" -o "${llvm_install_dir}/${llvm_tar_file}"
+            [[ "${?}" -eq "0" ]] && break || sleep 60
+        done
+        [[ "${?}" -eq "0" ]] || error_msg "LLVM toolchain file download failed."
+
+        # Decompress the LLVM toolchain
+        tar -xJf ${llvm_install_dir}/${llvm_tar_file} -C ${llvm_install_dir}
+        rm -f ${llvm_install_dir}/${llvm_tar_file}
 
         # Set cross compilation parameters
-        export PATH="${path_os_variable}"
+        export PATH="${llvm_install_dir}/bin:${path_os_variable}"
         export CROSS_COMPILE="aarch64-linux-gnu-"
         export CC="clang"
         export LD="ld.lld"

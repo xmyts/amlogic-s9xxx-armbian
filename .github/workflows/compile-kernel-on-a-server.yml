@@ -164,6 +164,8 @@ jobs:
           kernel_toolchain: ${{ inputs.kernel_toolchain }}
           compress_format: ${{ inputs.compress_format }}
           silent_log: ${{ inputs.silent_log }}
+          custom_kernel_path: /builder/kernel      # 添加自定义路径参数
+          custom_output_path: /builder/output     # 添加自定义路径参数
 
       - name: Upload Kernel to Release
         uses: ncipollo/release-action@main

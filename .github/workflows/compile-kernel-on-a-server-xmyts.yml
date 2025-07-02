@@ -65,7 +65,7 @@ on:
         default: "gcc"
         type: choice
         options:
-          - clang-14.0.6  # 修改为具体的LLVM版本
+          - clang-14.0.6
           - gcc
           - gcc-14.2
       compress_format:
@@ -94,10 +94,6 @@ jobs:
   build:
     runs-on: ubuntu-22.04-arm
     if: ${{ github.event.repository.owner.id }} == ${{ github.event.sender.id }}
-    # 修复容器配置，添加image参数
-    container:
-      image: ubuntu:22.04  # 添加基础镜像
-      options: --cpus 8 --memory 16g
 
     steps:
       - name: Checkout
@@ -123,6 +119,20 @@ jobs:
           sudo sed -i '/NVM_DIR/d;/skel/d' /root/{.bashrc,.profile}
           sudo rm -rf ~/{.cargo,.dotnet,.rustup}
           sudo timedatectl set-timezone "${TZ}"
+          
+          # 设置系统参数以优化编译环境
+          echo "Setting system parameters for optimal compilation..."
+          sudo sysctl -w vm.dirty_ratio=80
+          sudo sysctl -w vm.dirty_background_ratio=5
+          sudo sysctl -w vm.overcommit_memory=1
+          sudo sysctl -w fs.file-max=2097152
+          
+          # 验证系统资源
+          echo "System resources:"
+          free -h
+          df -h
+          nproc
+          
           echo "status=success" >> ${GITHUB_OUTPUT}
 
       - name: Create simulated physical disk
@@ -171,12 +181,12 @@ jobs:
           silent_log: ${{ inputs.silent_log }}
           custom_kernel_path: /builder/kernel
           custom_output_path: /builder/output
-          # 添加并行编译参数
-          parallel_jobs: $(nproc)  # 使用系统CPU核心数
-          # 添加清理选项
-          clean_mode: false        # 启用增量编译
-          # 添加内存优化选项
-          memory_limit: 8g         # 设置内存上限
+          # 调整并行编译参数，避免过度使用资源
+          parallel_jobs: $(expr $(nproc) - 1)  # 使用比CPU核心数少1的并行任务
+          # 启用增量编译
+          clean_mode: false
+          # 优化内存使用
+          memory_limit: 8g
 
       - name: Upload Kernel to Release
         uses: ncipollo/release-action@main

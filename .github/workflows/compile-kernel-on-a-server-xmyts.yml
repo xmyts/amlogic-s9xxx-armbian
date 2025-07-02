@@ -65,7 +65,7 @@ on:
         default: "gcc"
         type: choice
         options:
-          - clang-14.0.6
+          - clang
           - gcc
           - gcc-14.2
       compress_format:

@@ -492,8 +492,13 @@ compile_env() {
     # Set generic make string
     MAKE_SET_STRING=" ARCH=${SRC_ARCH} CROSS_COMPILE=${CROSS_COMPILE} CC=${CC} LD=${LD} ${MFLAGS} LOCALVERSION=${LOCALVERSION} "
 
-    # Make clean/mrproper
-    make ${MAKE_SET_STRING} mrproper
+    # 优化：仅在必要时执行清理，支持增量编译
+    if [[ ! -f ".config" || "$1" == "clean" ]]; then
+        make ${MAKE_SET_STRING} mrproper
+    else
+        make ${MAKE_SET_STRING} clean
+        echo -e "${INFO} Using incremental compilation to save time."
+    fi
 
     # Check .config file
     if [[ ! -s ".config" ]]; then
@@ -516,6 +521,46 @@ compile_env() {
             scripts/config -d LTO_CLANG_THIN
         fi
     }
+
+    # 添加编译优化参数
+    export CFLAGS="-O3 -march=armv8-a -mtune=cortex-a53 -fno-tree-vectorize -fno-slp-vectorize"
+    export CXXFLAGS="-O3 -march=armv8-a -mtune=cortex-a53"
+    export LDFLAGS="-Wl,--strip-all -Wl,--as-needed"
+    
+    # 启用LTO优化（仅适用于较新内核和Clang）
+    [[ "${toolchain_name}" == "clang" && "${kernel_x}" -ge "5" ]] && {
+        export CFLAGS="${CFLAGS} -flto=thin"
+        export CXXFLAGS="${CXXFLAGS} -flto=thin"
+        export LDFLAGS="${LDFLAGS} -flto=thin"
+    }
+
+    # Make menuconfig
+    #make ${MAKE_SET_STRING} menuconfig
+
+    # 更可靠地获取CPU核心数
+    PROCESS="$(nproc || grep -c ^processor /proc/cpuinfo || echo 1)"
+    # 考虑系统负载，使用核心数的80%避免系统卡顿
+    MAX_PROC=$(($PROCESS * 4 / 5))
+    PROCESS=${MAX_PROC:-1}
+    echo -e "${INFO} Using ${PROCESS} parallel processes for compilation."
+    
+    # 性能优化相关内核配置
+    scripts/config -e CONFIG_PREEMPT_VOLUNTARY
+    scripts/config -e CONFIG_SCHED_MC
+    scripts/config -e CONFIG_SCHED_SMT
+    scripts/config -e CONFIG_SCHED_DEBUG
+    scripts/config -e CONFIG_TASK_DELAY_ACCT
+    scripts/config -e CONFIG_HZ_1000
+    scripts/config -d CONFIG_PM_SLEEP
+    scripts/config -d CONFIG_SUSPEND
+    scripts/config -d CONFIG_HIBERNATION
+    
+    # 针对ARM64的优化
+    scripts/config -e CONFIG_ARM64_PAN
+    scripts/config -e CONFIG_ARM64_SPECULATION_CTRL
+    scripts/config -e CONFIG_ARM64_TASKS_OFFSET
+    scripts/config -e CONFIG_ARM64_MTE
+}
 
     # Make menuconfig
     #make ${MAKE_SET_STRING} menuconfig

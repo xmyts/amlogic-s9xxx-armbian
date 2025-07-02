@@ -10,11 +10,11 @@ CONFIG_AS_IS_LLVM=y
 CONFIG_AS_VERSION=140600
 CONFIG_LD_VERSION=0
 CONFIG_LD_IS_LLD=y
-+KBUILD_CFLAGS="-O3 -march=armv8.2-a+fp16+dotprod+crypto -mtune=cortex-a73.cortex-a53 \
+KBUILD_CFLAGS="-O3 -march=armv8.2-a+fp16+dotprod+crypto -mtune=cortex-a73.cortex-a53 \
                -ffat-lto-objects -fuse-ld=lld"
-+KBUILD_LDFLAGS="-flto=full -fuse-ld=lld"
-+CLANG_TRIPLE="aarch64-linux-gnu-"            # 与工具链匹配的三元组
-+CROSS_COMPILE="/usr/local/llvm/bin/aarch64-linux-gnu-"  # 指向你的LLVM工具链
+KBUILD_LDFLAGS="-flto=full -fuse-ld=lld"
+CLANG_TRIPLE="aarch64-linux-gnu-"            # 与工具链匹配的三元组
+CROSS_COMPILE="/usr/local/llvm/bin/aarch64-linux-gnu-"  # 指向你的LLVM工具链
 CONFIG_LLD_VERSION=140600
 CONFIG_CC_CAN_LINK=y
 CONFIG_CC_CAN_LINK_STATIC=y

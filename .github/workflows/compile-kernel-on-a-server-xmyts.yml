@@ -94,8 +94,9 @@ jobs:
   build:
     runs-on: ubuntu-22.04-arm
     if: ${{ github.event.repository.owner.id }} == ${{ github.event.sender.id }}
-    # 添加资源配置
+    # 修复容器配置，添加image参数
     container:
+      image: ubuntu:22.04  # 添加基础镜像
       options: --cpus 8 --memory 16g
 
     steps:

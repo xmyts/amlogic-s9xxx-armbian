@@ -579,6 +579,69 @@ compile_env() {
     scripts/config -e NETFILTER_XT_TARGET_TRACE
    # ====== 优化结束 ======
 
+      # ====== 新增：A311D 内核配置优化（增强版） ======
+      echo -e "${INFO} Applying A311D specific kernel configurations (performance boost)..."
+      
+      # 极致 CPU 性能模式
+      scripts/config -e CPU_FREQ_DEFAULT_GOV_PERFORMANCE
+      scripts/config -e CPU_FREQ_GOV_SCHEDUTIL
+      scripts/config -e CPU_FREQ_GOV_USERSPACE
+      scripts/config -d CPU_FREQ_GOV_ONDEMAND
+      scripts/config -d CPU_FREQ_GOV_CONSERVATIVE
+      
+      # 内存优化（牺牲一些安全性换取速度）
+      scripts/config -d DEBUG_INFO
+      scripts/config -d DEBUG_INFO_DWARF4
+      scripts/config -d DEBUG_INFO_REDUCED
+      scripts/config -d DEBUG_INFO_SPLIT
+      scripts/config -d DEBUG_KERNEL
+      scripts/config -d DEBUG_INFO_COMPRESSED
+      scripts/config -d MODULE_SIG
+      scripts/config -d MODULE_SIG_FORCE
+      
+      # 网络栈极致优化
+      scripts/config -e TCP_CONG_BBR
+      scripts/config -e TCP_CONG_CUBIC
+      scripts/config -e TCP_MD5SIG
+      scripts/config -e IPV6
+      scripts/config -e IPV6_ROUTE_INFO
+      scripts/config -e IPV6_MULTIPLE_TABLES
+      scripts/config -e IPV6_SUBTREES
+      scripts/config -e NETFILTER_XT_TARGET_TPROXY
+      scripts/config -e NETFILTER_XT_MATCH_IPVS
+      scripts/config -e NETFILTER_XT_MATCH_POLICY
+      scripts/config -e XFRM
+      scripts/config -e XFRM_USER
+      
+      # 文件系统和存储优化
+      scripts/config -e F2FS_FS_POSIX_ACL
+      scripts/config -e F2FS_FS_XATTR
+      scripts/config -e F2FS_FS_QUOTA
+      scripts/config -e F2FS_FS_ENCRYPTION
+      scripts/config -e EXT4_FS_POSIX_ACL
+      scripts/config -e EXT4_FS_SECURITY
+      scripts/config -e EXT4_USE_FOR_EXT2
+      scripts/config -e EXT4_FS_FS_VERITY
+      scripts/config -e NTFS3_FS
+      scripts/config -e EXFAT_FS
+      
+      # 减少调试和冗余功能
+      scripts/config -d DEBUG_FS
+      scripts/config -d SECURITY_SELINUX
+      scripts/config -d SECURITY_APPARMOR
+      scripts/config -d SECURITY_YAMA
+      scripts/config -d SECURITY
+      scripts/config -d BLK_DEV_RAM
+      scripts/config -d BLK_DEV_INITRD
+      scripts/config -d DEVTMPFS_MOUNT
+      scripts/config -d CPU_FREQ_STAT
+      scripts/config -d MEMCG_KMEM
+      scripts/config -d MEMCG_SWAP
+      scripts/config -d MEMCG_SWAP_ENABLED
+      scripts/config -d CONFIG_CPU_FREQ_GOV_POWERSAVE
+      # ====== 优化结束 ======
+
+
 
     # Make menuconfig
     #make ${MAKE_SET_STRING} menuconfig
@@ -592,8 +655,21 @@ compile_env() {
     # 对于 A311D 这样的 8 核设备，使用适当的线程数
     # 增加 20% 的线程数来利用超线程或突发性能
     PROCESS=$((PROCESS * 120 / 100))
-    [[ "${PROCESS}" -gt "8" ]] && PROCESS="6"  # 避免过度占用系统资源
-    
+    [[ "${PROCESS}" -gt "6" ]] && PROCESS="6"  # 避免过度占用系统资源
+   
+      # ====== 新增：编译参数优化（增强版） ======
+      # 启用 LTO（链接时优化）和 PGO（-profile-guided optimization）
+      if [[ "${toolchain_name}" == "gcc" ]]; then
+          echo -e "${INFO} Enabling LTO and PGO for maximum performance (may increase compile time)"
+          MAKE_SET_STRING="${MAKE_SET_STRING} LTO=thin"
+          # 对于支持的 GCC 版本，启用 PGO
+          if [[ "${gcc_version_code}" =~ ^[1-9][0-9]*\.[0-9]+$ && "${gcc_version_code}" > "10.0" ]]; then
+              MAKE_SET_STRING="${MAKE_SET_STRING} PGO=auto"
+          fi
+      fi
+ # ====== 优化结束 ======
+
+ 
     echo -e "${INFO} Using ${PROCESS} threads for compilation"
     # ====== 优化结束 ======
 }
@@ -613,19 +689,21 @@ compile_kernel() {
     # Set the make log silent output
     [[ "${silent_log}" == "true" || "${silent_log}" == "yes" ]] && silent_print="-s" || silent_print=""
 
- # ====== 新增：GCC 优化选项 ======
-   # 针对 A311D (Cortex-A73/A53) 的优化选项
-   gcc_optimizations="-march=armv8-a -mtune=cortex-a73 -O3 -pipe -fno-plt -fno-fat-lto-objects \
-                      -fno-common -fshort-wchar -funwind-tables \
-                      -fno-PIE -fno-stack-protector-strong \
-                      -Wno-unused-but-set-variable -Wno-missing-field-initializers"
-   
-   # 更新 MAKE_SET_STRING，添加优化选项
-   MAKE_SET_STRING=" ARCH=${SRC_ARCH} CROSS_COMPILE=${CROSS_COMPILE} CC=${CC} LD=${LD} ${MFLAGS} \
-                    LOCALVERSION=${LOCALVERSION} CFLAGS=\"${gcc_optimizations}\" \
-                    CXXFLAGS=\"${gcc_optimizations}\" LDFLAGS=\"-Wl,--strip-all\" "
-   # ====== 优化结束 ======
-
+      # ====== 新增：GCC 优化选项（增强版） ======
+      # 针对 A311D (Cortex-A73/A53) 的极致性能优化
+      gcc_optimizations="-march=armv8.2-a -mtune=cortex-a73 -O3 -Ofast -pipe -fno-plt -fno-fat-lto-objects \
+                         -fno-common -fshort-wchar -funwind-tables -funroll-loops -ftree-vectorize \
+                         -falign-functions=32 -falign-jumps=32 -falign-loops=32 -fstrict-aliasing \
+                         -fno-stack-protector -fno-ident -fomit-frame-pointer -mbranch-target-align=32 \
+                         -fno-PIE -fno-semantic-interposition -flto=auto -fuse-linker-plugin \
+                         -Wno-unused-but-set-variable -Wno-missing-field-initializers \
+                         -ffunction-sections -fdata-sections"
+      
+      # 更新 MAKE_SET_STRING，添加优化选项
+      MAKE_SET_STRING=" ARCH=${SRC_ARCH} CROSS_COMPILE=${CROSS_COMPILE} CC=${CC} LD=${LD} ${MFLAGS} \
+                       LOCALVERSION=${LOCALVERSION} CFLAGS=\"${gcc_optimizations}\" \
+                       CXXFLAGS=\"${gcc_optimizations}\" LDFLAGS=\"-Wl,--strip-all,--gc-sections\" "
+      # ====== 优化结束 ======
 
     # Make kernel
     echo -e "${STEPS} Start compilation kernel [ ${local_kernel_path} ]..."

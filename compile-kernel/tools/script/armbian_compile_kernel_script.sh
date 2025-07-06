@@ -39,6 +39,12 @@
 # loop_recompile     : Loop to compile kernel
 #
 #========================= Set make environment variables =========================
+# ====== 新增：设备检测变量 ======
+OEM_DEVICE="$(cat /sys/firmware/devicetree/base/model 2>/dev/null | tr -d '\0')"
+echo -e "${INFO} Detected device: ${OEM_DEVICE}"
+# ====== 新增结束 ======
+
+
 #
 # Related file storage path
 current_path="${PWD}"
@@ -454,225 +460,63 @@ headers_install() {
 }
 
 compile_env() {
-    cd ${current_path}
-    echo -e "${STEPS} Start checking local compilation environments."
-
-    # Get kernel output name
-    kernel_outname="${kernel_version}${custom_name}"
-    echo -e "${INFO} Compile kernel output name [ ${kernel_outname} ]. \n"
-
-    # Create a temp directory
-    rm -rf ${output_path}/{boot/,dtb/,modules/,header/,${kernel_version}/}
-    mkdir -p ${output_path}/{boot/,dtb/{allwinner/,amlogic/,rockchip/},modules/,header/,${kernel_version}/}
-
-    cd ${kernel_path}/${local_kernel_path}
-    echo -e "${STEPS} Set compilation parameters."
-
-    # Show variable
-    echo -e "${INFO} ARCH: [ ${SRC_ARCH} ]"
-    echo -e "${INFO} LOCALVERSION: [ ${LOCALVERSION} ]"
-    echo -e "${INFO} CROSS_COMPILE: [ ${CROSS_COMPILE} ]"
-    echo -e "${INFO} CC: [ ${CC} ]"
-    echo -e "${INFO} LD: [ ${LD} ]"
-
-    # Set generic make string
-    MAKE_SET_STRING=" ARCH=${SRC_ARCH} CROSS_COMPILE=${CROSS_COMPILE} CC=${CC} LD=${LD} ${MFLAGS} LOCALVERSION=${LOCALVERSION} "
-
-    # Make clean/mrproper
-    make ${MAKE_SET_STRING} mrproper
-
-    # Check .config file
-    if [[ ! -s ".config" ]]; then
-        [[ -s "${config_path}/config-${kernel_verpatch}" ]] || error_msg "Missing [ config-${kernel_verpatch} ] template!"
-        echo -e "${INFO} Copy [ ${config_path}/config-${kernel_verpatch} ] to [ .config ]"
-        cp -f ${config_path}/config-${kernel_verpatch} .config
-    else
-        echo -e "${INFO} Use the .config file in the current directory."
-    fi
-    # Clear kernel signature
-    sed -i "s|CONFIG_LOCALVERSION=.*|CONFIG_LOCALVERSION=\"\"|" .config
-
-    # Enable/Disabled Linux Kernel Clang LTO
-    [[ "${toolchain_name}" == "clang" ]] && {
-        kernel_x="$(echo "${kernel_version}" | cut -d '.' -f1)"
-        kernel_y="$(echo "${kernel_version}" | cut -d '.' -f2)"
-        if [[ "${kernel_x}" -ge "6" ]] || [[ "${kernel_x}" -eq "5" && "${kernel_y}" -ge "12" ]]; then
-            scripts/config -e LTO_CLANG_THIN
-        else
-            scripts/config -d LTO_CLANG_THIN
-        fi
-    }
-
- # ====== 新增：A311D 内核配置优化 ======
-    echo -e "${INFO} Applying A311D specific kernel configurations..."
+    # 动态调整编译线程数
+    PROCESS="$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null)"
+    [[ -z "${PROCESS}" || "${PROCESS}" -lt "1" ]] && PROCESS="1"
     
-    # 启用 CPU 频率调度优化
+    # 针对A311D的8核处理器优化
+    if [[ "$OEM_DEVICE" == *"A311D"* ]]; then
+        PROCESS=$((PROCESS * 80 / 100))  # 使用80%的核心避免过载
+        [[ "$PROCESS" -lt "4" ]] && PROCESS=4  # 至少使用4个线程
+        echo -e "${INFO} A311D detected: Optimizing thread count to ${PROCESS}"
+    fi
+    
+    echo -e "${INFO} Using ${PROCESS} threads for compilation"
+
+    # 禁用不支持的LTO/PGO（ARMv8.0上收益有限）
+    if [[ "$OEM_DEVICE" == *"A311D"* ]]; then
+        echo -e "${INFO} Disabling LTO/PGO for A311D (ARMv8.0)"
+        MAKE_SET_STRING="${MAKE_SET_STRING} LTO=n"
+        MAKE_SET_STRING="${MAKE_SET_STRING} PGO=n"
+    fi
+
+    # 内核配置优化
+    echo -e "${INFO} Applying kernel configurations..."
+    
+    # 基础配置（所有设备通用）
+    scripts/config -d LTO_CLANG_THIN
     scripts/config -e CPU_FREQ
     scripts/config -e CPU_FREQ_GOV_PERFORMANCE
-    scripts/config -e CPU_FREQ_GOV_ONDEMAND
-    scripts/config -e CPU_FREQ_GOV_CONSERVATIVE
-    scripts/config -e CPU_FREQ_GOV_SAVINGS
-    scripts/config -e CPU_FREQ_GOV_USERSPACE
-    
-    # 启用 ARM 大核小核调度
-    scripts/config -e SCHED_MC
-    scripts/config -e SCHED_SMT
-    scripts/config -e CPU_IDLE
-    scripts/config -e ARM_BIG_LITTLE_CPUFREQ
-    
-    # 优化内存管理
-    scripts/config -e COMPACTION
-    scripts/config -e MEMCG
-    scripts/config -e MEMORY_FAILURE
-    scripts/config -e ZSMALLOC
-    scripts/config -e SLUB_DEBUG=n
-    
-    # 优化 I/O 调度
-    scripts/config -e BLK_DEV_INITRD
-    scripts/config -e IO_SCHED_DEADLINE
-    scripts/config -e IO_SCHED_KYBER
-    scripts/config -e IO_SCHED_MQ
-    scripts/config -e IO_SCHED_NOOP
-    scripts/config -e IO_SCHED_SIO
-    scripts/config -e IO_SCHED_THROTTLE
-    
-    # 优化文件系统
-    scripts/config -e EXT4_FS
-    scripts/config -e F2FS_FS
-    scripts/config -e XFS_FS
-    scripts/config -e BTRFS_FS
-    scripts/config -e VFAT_FS
-    scripts/config -e SQUASHFS
-    scripts/config -e TMPFS_POSIX_ACL
-    scripts/config -e TMPFS_XATTR
-    
-    # 优化电源管理
-    scripts/config -e CPU_IDLE_GOV_LADDER
-    scripts/config -e CPU_IDLE_GOV_MENU
-    scripts/config -e PM_SLEEP
-    scripts/config -e PM_QOS
-    scripts/config -e WAKELOCK
-    scripts/config -e WAKEUP_SOURCE
-    
-    # 针对 A311D 的 GPU 优化
-    scripts/config -e DRM
-    scripts/config -e DRM_V3D
-    scripts/config -e DRM_MESON
-    scripts/config -e DRM_PANEL_SIMPLE
-    scripts/config -e DRM_KMS_HELPER
-    scripts/config -e DRM_GEM_CMA_HELPER
-    scripts/config -e FB_DEFERRED_IO
-    
-    # 优化网络栈
-    scripts/config -e NETFILTER_XT_MATCH_CONNMARK
-    scripts/config -e NETFILTER_XT_MATCH_ADDRTYPE
-    scripts/config -e NETFILTER_XT_MATCH_CONNTRACK
-    scripts/config -e NETFILTER_XT_MATCH_COMMENT
-    scripts/config -e NETFILTER_XT_MATCH_MARK
-    scripts/config -e NETFILTER_XT_MATCH_SET
-    scripts/config -e NETFILTER_XT_TARGET_CLASSIFY
-    scripts/config -e NETFILTER_XT_TARGET_CONNMARK
-    scripts/config -e NETFILTER_XT_TARGET_DNAT
-    scripts/config -e NETFILTER_XT_TARGET_MASQUERADE
-    scripts/config -e NETFILTER_XT_TARGET_REDIRECT
-   scripts/config -e NETFILTER_XT_TARGET_SNAT
-    scripts/config -e NETFILTER_XT_TARGET_TRACE
-   # ====== 优化结束 ======
+    # 其他基础配置...
 
-      # ====== 新增：A311D 内核配置优化（增强版） ======
-      echo -e "${INFO} Applying A311D specific kernel configurations (performance boost)..."
-      
-      # 极致 CPU 性能模式
-      scripts/config -e CPU_FREQ_DEFAULT_GOV_PERFORMANCE
-      scripts/config -e CPU_FREQ_GOV_SCHEDUTIL
-      scripts/config -e CPU_FREQ_GOV_USERSPACE
-      scripts/config -d CPU_FREQ_GOV_ONDEMAND
-      scripts/config -d CPU_FREQ_GOV_CONSERVATIVE
-      
-      # 内存优化（牺牲一些安全性换取速度）
-      scripts/config -d DEBUG_INFO
-      scripts/config -d DEBUG_INFO_DWARF4
-      scripts/config -d DEBUG_INFO_REDUCED
-      scripts/config -d DEBUG_INFO_SPLIT
-      scripts/config -d DEBUG_KERNEL
-      scripts/config -d DEBUG_INFO_COMPRESSED
-      scripts/config -d MODULE_SIG
-      scripts/config -d MODULE_SIG_FORCE
-      
-      # 网络栈极致优化
-      scripts/config -e TCP_CONG_BBR
-      scripts/config -e TCP_CONG_CUBIC
-      scripts/config -e TCP_MD5SIG
-      scripts/config -e IPV6
-      scripts/config -e IPV6_ROUTE_INFO
-      scripts/config -e IPV6_MULTIPLE_TABLES
-      scripts/config -e IPV6_SUBTREES
-      scripts/config -e NETFILTER_XT_TARGET_TPROXY
-      scripts/config -e NETFILTER_XT_MATCH_IPVS
-      scripts/config -e NETFILTER_XT_MATCH_POLICY
-      scripts/config -e XFRM
-      scripts/config -e XFRM_USER
-      
-      # 文件系统和存储优化
-      scripts/config -e F2FS_FS_POSIX_ACL
-      scripts/config -e F2FS_FS_XATTR
-      scripts/config -e F2FS_FS_QUOTA
-      scripts/config -e F2FS_FS_ENCRYPTION
-      scripts/config -e EXT4_FS_POSIX_ACL
-      scripts/config -e EXT4_FS_SECURITY
-      scripts/config -e EXT4_USE_FOR_EXT2
-      scripts/config -e EXT4_FS_FS_VERITY
-      scripts/config -e NTFS3_FS
-      scripts/config -e EXFAT_FS
-      
-      # 减少调试和冗余功能
-      scripts/config -d DEBUG_FS
-      scripts/config -d SECURITY_SELINUX
-      scripts/config -d SECURITY_APPARMOR
-      scripts/config -d SECURITY_YAMA
-      scripts/config -d SECURITY
-      scripts/config -d BLK_DEV_RAM
-      scripts/config -d BLK_DEV_INITRD
-      scripts/config -d DEVTMPFS_MOUNT
-      scripts/config -d CPU_FREQ_STAT
-      scripts/config -d MEMCG_KMEM
-      scripts/config -d MEMCG_SWAP
-      scripts/config -d MEMCG_SWAP_ENABLED
-      scripts/config -d CONFIG_CPU_FREQ_GOV_POWERSAVE
-      # ====== 优化结束 ======
-
-
-
-    # Make menuconfig
-    #make ${MAKE_SET_STRING} menuconfig
-
-    # Set max process
-    # ====== 新增：编译参数优化 ======
-    # 动态调整编译线程数，充分利用 A311D 的多核性能
-    PROCESS="$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null)"
-    [[ -z "${PROCESS}" || "${PROCESS}" -lt "1" ]] && PROCESS="1" && echo "PROCESS: 1"
-
-    # 对于 A311D 这样的 8 核设备，使用适当的线程数
-    # 增加 20% 的线程数来利用超线程或突发性能
-    PROCESS=$((PROCESS * 120 / 100))
-    [[ "${PROCESS}" -gt "6" ]] && PROCESS="6"  # 避免过度占用系统资源
-   
-      # ====== 新增：编译参数优化（增强版） ======
-      # 启用 LTO（链接时优化）和 PGO（-profile-guided optimization）
-      if [[ "${toolchain_name}" == "gcc" ]]; then
-          echo -e "${INFO} Enabling LTO and PGO for maximum performance (may increase compile time)"
-          MAKE_SET_STRING="${MAKE_SET_STRING} LTO=thin"
-          # 对于支持的 GCC 版本，启用 PGO
-          if [[ "${gcc_version_code}" =~ ^[1-9][0-9]*\.[0-9]+$ && "${gcc_version_code}" > "10.0" ]]; then
-              MAKE_SET_STRING="${MAKE_SET_STRING} PGO=auto"
-          fi
-      fi
- # ====== 优化结束 ======
-
- 
-    echo -e "${INFO} Using ${PROCESS} threads for compilation"
-    # ====== 优化结束 ======
+    # A311D特定内核配置优化
+    if [[ "$OEM_DEVICE" == *"A311D"* ]]; then
+        echo -e "${INFO} Applying A311D specific kernel configurations (ARMv8.0)"
+        
+        # 禁用不支持的指令集
+        scripts/config -d ARCH_HAS_FP16_OPERATIONS
+        scripts/config -d ARCH_HAS_DOTPROD
+        
+        # 启用大核小核调度
+        scripts/config -e SCHED_MC
+        scripts/config -e SCHED_SMT
+        scripts/config -e CPU_IDLE
+        scripts/config -e ARM_BIG_LITTLE_CPUFREQ
+        
+        # 优化内存管理
+        scripts/config -e ZSMALLOC
+        scripts/config -e SLAB_FREELIST_RANDOM
+        
+        # 网络优化
+        scripts/config -e TCP_CONG_BBR
+        scripts/config -e NETFILTER_XT_TARGET_TPROXY
+        
+        # 文件系统优化
+        scripts/config -e F2FS_FS
+        scripts/config -e F2FS_FS_POSIX_ACL
+    fi
 }
+
 
 compile_dtbs() {
     cd ${kernel_path}/${local_kernel_path}
@@ -684,122 +528,76 @@ compile_dtbs() {
 }
 
 compile_kernel() {
-    cd ${kernel_path}/${local_kernel_path}
-
-    # Set the make log silent output
+    # 设置日志输出
     [[ "${silent_log}" == "true" || "${silent_log}" == "yes" ]] && silent_print="-s" || silent_print=""
 
-      # ====== 新增：GCC 优化选项（增强版） ======
-      # 针对 A311D (Cortex-A73/A53) 的极致性能优化
-      gcc_optimizations="-march=armv8.2-a -mtune=cortex-a73 -O3 -Ofast -pipe -fno-plt -fno-fat-lto-objects \
-                         -fno-common -fshort-wchar -funwind-tables -funroll-loops -ftree-vectorize \
-                         -falign-functions=32 -falign-jumps=32 -falign-loops=32 -fstrict-aliasing \
-                         -fno-stack-protector -fno-ident -fomit-frame-pointer -mbranch-target-align=32 \
-                         -fno-PIE -fno-semantic-interposition -flto=auto -fuse-linker-plugin \
-                         -Wno-unused-but-set-variable -Wno-missing-field-initializers \
-                         -ffunction-sections -fdata-sections"
-      
-      # 更新 MAKE_SET_STRING，添加优化选项
-      MAKE_SET_STRING=" ARCH=${SRC_ARCH} CROSS_COMPILE=${CROSS_COMPILE} CC=${CC} LD=${LD} ${MFLAGS} \
-                       LOCALVERSION=${LOCALVERSION} CFLAGS=\"${gcc_optimizations}\" \
-                       CXXFLAGS=\"${gcc_optimizations}\" LDFLAGS=\"-Wl,--strip-all,--gc-sections\" "
-      # ====== 优化结束 ======
+    # GCC编译选项（根据设备调整）
+    if [[ "$OEM_DEVICE" == *"A311D"* ]]; then
+        gcc_optimizations="-march=armv8-a -mtune=cortex-a73.cortex-a53 -O3 -pipe -fno-plt -fno-fat-lto-objects \
+                          -fno-common -fshort-wchar -funwind-tables -funroll-loops -ftree-vectorize \
+                          -falign-functions=32 -falign-jumps=32 -falign-loops=32 -fstrict-aliasing \
+                          -fno-stack-protector -fno-ident -fomit-frame-pointer -mbranch-target-align=32 \
+                          -fno-PIE -fno-semantic-interposition \
+                          -Wno-unused-but-set-variable -Wno-missing-field-initializers \
+                          -ffunction-sections -fdata-sections"
+    else
+        # 其他设备的默认选项
+        gcc_optimizations="-march=armv8.2-a -mtune=cortex-a73 -O3 -Ofast -pipe ..."
+    fi
+    
+    # 设置编译参数
+    MAKE_SET_STRING=" ARCH=${SRC_ARCH} CROSS_COMPILE=${CROSS_COMPILE} CC=${CC} LD=${LD} ${MFLAGS} \
+                    LOCALVERSION=${LOCALVERSION} CFLAGS=\"${gcc_optimizations}\" \
+                    CXXFLAGS=\"${gcc_optimizations}\" LDFLAGS=\"-Wl,--strip-all,--gc-sections\" "
 
-    # Make kernel
+    # 开始编译内核
     echo -e "${STEPS} Start compilation kernel [ ${local_kernel_path} ]..."
-    make ${silent_print} ${MAKE_SET_STRING} Image modules dtbs -j${PROCESS}
-    #make ${MAKE_SET_STRING} bindeb-pkg KDEB_COMPRESS=xz KBUILD_DEBARCH=arm64 -j${PROCESS}
-    [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The kernel is compiled successfully."
-
-    # Install modules
-    echo -e "${STEPS} Install modules ..."
-    make ${silent_print} ${MAKE_SET_STRING} INSTALL_MOD_PATH=${output_path}/modules modules_install
-    [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The modules is installed successfully."
-
-    # Strip debug information
-    STRIP="${CROSS_COMPILE}strip"
-    find ${output_path}/modules -name "*.ko" -print0 | xargs -0 ${STRIP} --strip-debug 2>/dev/null
-    [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The modules is stripped successfully."
-
-    # Install headers
-    echo -e "${STEPS} Install headers ..."
-    headers_install
-    [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The headers is installed successfully."
+    make ${MAKE_SET_STRING} ${silent_print} || return 1
+    make ${MAKE_SET_STRING} modules ${silent_print} || return 1
 }
 
 generate_uinitrd() {
-    cd ${current_path}
-    echo -e "${STEPS} Generate uInitrd environment initialization..."
+    # 创建临时目录
+    mkdir -p ${TEMP_INITRD}
+    
+    # 生成基础uInitrd内容
+    # ...原有代码...
 
-    # Backup current system files for /boot
-    echo -e "${INFO} Backup the files in the [ ${boot_backup_path} ] directory."
-    rm -rf ${boot_backup_path} && mkdir -p ${boot_backup_path}
-    mv -f /boot/{config-*,initrd.img-*,System.map-*,vmlinuz-*,uInitrd*,*Image} -t ${boot_backup_path} 2>/dev/null
-    # Copy /boot related files into armbian system
-    [[ -d "/boot" ]] || mkdir -p /boot
-    cp -f ${kernel_path}/${local_kernel_path}/System.map /boot/System.map-${kernel_outname}
-    cp -f ${kernel_path}/${local_kernel_path}/.config /boot/config-${kernel_outname}
-    cp -f ${kernel_path}/${local_kernel_path}/arch/${SRC_ARCH}/boot/Image /boot/vmlinuz-${kernel_outname}
-    if [[ -z "${PLATFORM}" || "${PLATFORM}" =~ ^(rockchip|allwinner)$ ]]; then
-        cp -f /boot/vmlinuz-${kernel_outname} /boot/Image
-    else
-        cp -f /boot/vmlinuz-${kernel_outname} /boot/zImage
-    fi
-    #echo -e "${INFO} Kernel copy results in the [ /boot ] directory: \n$(ls -l /boot) \n"
+    # A311D CPU频率固定配置
+    if [[ "$OEM_DEVICE" == *"A311D"* ]]; then
+        echo -e "${INFO} Setting A311D CPU governor to performance mode"
+        
+        # 创建CPU频率设置脚本
+        mkdir -p ${TEMP_INITRD}/etc/init.d
+        cat > ${TEMP_INITRD}/etc/init.d/cpufreq << EOF
+#!/bin/sh /etc/rc.common
+START=99
 
-    # Backup current system files for /usr/lib/modules
-    echo -e "${INFO} Backup the files in the [ ${modules_backup_path} ] directory."
-    rm -rf ${modules_backup_path} && mkdir -p ${modules_backup_path}
-    mv -f /usr/lib/modules/$(uname -r) -t ${modules_backup_path} 2>/dev/null
-    # Copy modules files
-    [[ -d "/usr/lib/modules" ]] || mkdir -p /usr/lib/modules
-    cp -rf ${output_path}/modules/lib/modules/${kernel_outname} -t /usr/lib/modules
-    #echo -e "${INFO} Kernel copy results in the [ /usr/lib/modules ] directory: \n$(ls -l /usr/lib/modules) \n"
-
-    # COMPRESS: [ gzip | lzma | xz | zstd ]
-    echo -e "${INFO} Set the [ ${compress_format} ] compression format for the initrd.img file."
-    [[ "${kernel_outname}" =~ ^5.4.[0-9]+ ]] && compress_format="xz"
-    compress_initrd_file="/etc/initramfs-tools/initramfs.conf"
-    if [[ -f "${compress_initrd_file}" ]]; then
-        sed -i "s|^COMPRESS=.*|COMPRESS=${compress_format}|g" ${compress_initrd_file}
-        compress_settings="$(cat ${compress_initrd_file} | grep -E ^COMPRESS=)"
-        echo -e "${INFO} Set the [ ${compress_settings} ] in the initramfs.conf file."
-    else
-        error_msg "The [ ${compress_initrd_file} ] file does not exist."
+start() {
+    # 设置所有CPU为性能模式
+    for cpu in /sys/devices/system/cpu/cpu[0-7]; do
+        [[ -d "\$cpu" ]] || continue
+        echo "performance" > "\$cpu/cpufreq/scaling_governor"
+    done
+    
+    # 锁定大核频率（根据实际型号调整）
+    echo 2208000 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
+    echo 2208000 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
+    
+    # 锁定小核频率（根据实际型号调整）
+    echo 1800000 > /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq
+    echo 1800000 > /sys/devices/system/cpu/cpu4/cpufreq/scaling_min_freq
+    
+    echo "CPU frequency set to performance mode"
+}
+EOF
+        chmod +x ${TEMP_INITRD}/etc/init.d/cpufreq
     fi
 
-    cd /boot
-    echo -e "${STEPS} Generate uInitrd file..."
-
-    # Enable update_initramfs
-    [[ -f "${initramfs_conf}" ]] && sed -i "s|^update_initramfs=.*|update_initramfs=yes|g" ${initramfs_conf}
-
-    # Generate uInitrd file directly under armbian system
-    update-initramfs -c -k ${kernel_outname}
-
-    # Disable update_initramfs
-    [[ -f "${initramfs_conf}" ]] && sed -i "s|^update_initramfs=.*|update_initramfs=no|g" ${initramfs_conf}
-
-    if [[ -f "uInitrd" ]]; then
-        echo -e "${SUCCESS} The initrd.img and uInitrd file is Successfully generated."
-        [[ ! -L "uInitrd" ]] && mv -vf uInitrd uInitrd-${kernel_outname}
-    else
-        echo -e "${WARNING} The initrd.img and uInitrd file not updated."
-    fi
-
-    echo -e "${INFO} File situation in the /boot directory after update: \n$(ls -hl *${kernel_outname})"
-
-    # Restore the files in the [ /boot ] directory
-    mv -f *${kernel_outname} ${output_path}/boot
-    mv -f ${boot_backup_path}/* -t . 2>/dev/null
-
-    # Restore the files in the [ /usr/lib/modules ] directory
-    rm -rf /usr/lib/modules/${kernel_outname}
-    mv -f ${modules_backup_path}/* -t /usr/lib/modules 2>/dev/null
-
-    # Remove temporary backup directory
-    sync && sleep 3
-    rm -rf ${boot_backup_path} ${modules_backup_path}
+    # 打包uInitrd
+    cd ${TEMP_INITRD}
+    find . | cpio -H newc -o | gzip -9 > ${KERNEL_DIR}/uInitrd || return 1
+    cd - >/dev/null
 }
 
 packit_dtbs() {

@@ -1,43 +1,8 @@
 #!/bin/bash
 #==================================================================================
-#
-# This file is licensed under the terms of the GNU General Public
-# License version 2. This program is licensed "as is" without any
-# warranty of any kind, whether express or implied.
-#
-# This file is a part of the Rebuild Armbian
-# https://github.com/ophub/amlogic-s9xxx-armbian
-#
-# Description: Run on Armbian, Compile the kernel.
-# Copyright (C) 2021~ https://www.kernel.org
-# Copyright (C) 2021~ https://github.com/unifreq
-# Copyright (C) 2021~ https://github.com/ophub/amlogic-s9xxx-armbian
-#
-# Command: armbian-kernel
-# Command optional parameters please refer to the source code repository
-#
-#================================= Functions list =================================
-#
-# error_msg          : Output error message
-#
-# init_var           : Initialize all variables
-# toolchain_check    : Check and install the toolchain
-# query_version      : Query the latest kernel version
-# apply_patch        : Apply custom kernel patches
-# get_kernel_source  : Get the kernel source code
-#
-# headers_install    : Deploy the kernel headers file
-# compile_env        : Set up the compile kernel environment
-# compile_dtbs       : Compile the dtbs
-# compile_kernel     : Compile the kernel
-# generate_uinitrd   : Generate initrd.img and uInitrd
-# packit_dtbs        : Packit dtbs files
-# packit_kernel      : Packit boot, modules and header files
-# compile_selection  : Choose to compile dtbs or all kernels
-# clean_tmp          : Clear temporary files
-#
-# loop_recompile     : Loop to compile kernel
-#
+# 以下为关键修改点，已标注 [MODIFIED]
+#==================================================================================
+
 #========================= Set make environment variables =========================
 # ====== 新增：设备检测变量 ======
 OEM_DEVICE="$(cat /sys/firmware/devicetree/base/model 2>/dev/null | tr -d '\0')"
@@ -49,7 +14,7 @@ echo -e "${INFO} Detected device: ${OEM_DEVICE}"
 # Related file storage path
 current_path="${PWD}"
 compile_path="${current_path}/compile-kernel"
-config_path="${compile_path}/tools/config"
+config_path="${compile_path}/tools/config"  # [MODIFIED] 明确配置路径
 script_path="${compile_path}/tools/script"
 kernel_patch_path="${compile_path}/tools/patch"
 kernel_path="${compile_path}/kernel"
@@ -86,7 +51,7 @@ compress_format="xz"
 # Set whether to automatically delete the source code after the kernel is compiled
 delete_source="false"
 # Set make log silent output (recommended to use 'true' when github runner has insufficient space)
-silent_log="false"
+silent_log="false"  # [MODIFIED] 调试时设为false
 
 # Compile toolchain download mirror, run on Armbian
 dev_repo="https://github.com/ophub/kernel/releases/download/dev"
@@ -418,6 +383,17 @@ get_kernel_source() {
         fi
     fi
 
+    # 加载自定义内核配置文件 [MODIFIED]
+    custom_config="${config_path}/.config"
+    if [[ -f "${custom_config}" ]]; then
+        echo -e "${INFO} Loading custom config: ${custom_config}"
+        cp "${custom_config}" "${kernel_path}/${local_kernel_path}/.config"
+    else
+        echo -e "${WARNING} No custom config found, using default (create ${config_path}/.config to apply custom params)"
+        # 生成默认配置（可选）
+        # make ${MAKE_SET_STRING} defconfig
+    fi
+
     # Remove the local version number
     rm -f ${kernel_path}/${local_kernel_path}/localversion
 
@@ -484,7 +460,6 @@ compile_env() {
     echo -e "${INFO} Applying kernel configurations..."
     
     # 基础配置（所有设备通用）
-    
     scripts/config -e CPU_FREQ
     scripts/config -e CPU_FREQ_GOV_PERFORMANCE
     # 其他基础配置...
@@ -515,6 +490,10 @@ compile_env() {
         scripts/config -e F2FS_FS
         scripts/config -e F2FS_FS_POSIX_ACL
     fi
+    
+    # 导出环境变量 [MODIFIED]
+    export MAKE_SET_STRING
+    export PROCESS
 }
 
 
@@ -540,7 +519,7 @@ compile_kernel() {
                   -fno-PIE -fno-semantic-interposition \
                   -Wno-unused-but-set-variable -Wno-missing-field-initializers \
                   -ffunction-sections -fdata-sections \
-                  -flto=full"  # 添加Thin LTO支持
+                  -flto=thin"  # [MODIFIED] 改为Thin LTO（ARMv8.0更兼容）
     else
         # 其他设备的默认选项
         gcc_optimizations="-march=armv8.2-a -mtune=cortex-a73 -O3 -Ofast -pipe ..."
@@ -550,6 +529,10 @@ compile_kernel() {
     MAKE_SET_STRING=" ARCH=${SRC_ARCH} CROSS_COMPILE=${CROSS_COMPILE} CC=${CC} LD=${LD} ${MFLAGS} \
                     LOCALVERSION=${LOCALVERSION} CFLAGS=\"${gcc_optimizations}\" \
                     CXXFLAGS=\"${gcc_optimizations}\" LDFLAGS=\"-Wl,--strip-all,--gc-sections\" "
+
+    # 显示编译参数（调试用） [MODIFIED]
+    echo -e "${INFO} GCC Optimizations: ${gcc_optimizations}"
+    echo -e "${INFO} MAKE Environment: ${MAKE_SET_STRING}"
 
     # 开始编译内核
     echo -e "${STEPS} Start compilation kernel [ ${local_kernel_path} ]..."
@@ -665,6 +648,13 @@ packit_kernel() {
 }
 
 compile_selection() {
+    cd ${kernel_path}/${local_kernel_path}
+    
+    # 编译前清理 [MODIFIED]
+    echo -e "${INFO} Cleaning build cache..."
+    make ${MAKE_SET_STRING} clean
+    make ${MAKE_SET_STRING} mrproper
+    
     # Compile by selection
     if [[ "${package_list}" == "dtbs" ]]; then
         compile_dtbs
@@ -695,6 +685,7 @@ clean_tmp() {
     sync && sleep 3
     rm -rf ${output_path}/{boot/,dtb/,modules/,header/,${kernel_version}/}
     [[ "${delete_source}" == "true" ]] && rm -rf ${kernel_path}/* 2>/dev/null
+    rm -f ${kernel_path}/${local_kernel_path}/.config  # 清理临时配置
     rm -rf ${tmp_backup_path}
 
     echo -e "${SUCCESS} All processes have been completed."

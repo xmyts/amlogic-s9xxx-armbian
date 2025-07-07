@@ -484,7 +484,7 @@ compile_env() {
     echo -e "${INFO} Applying kernel configurations..."
     
     # 基础配置（所有设备通用）
-    scripts/config -d LTO_CLANG_THIN
+    
     scripts/config -e CPU_FREQ
     scripts/config -e CPU_FREQ_GOV_PERFORMANCE
     # 其他基础配置...
@@ -533,13 +533,14 @@ compile_kernel() {
 
     # GCC编译选项（根据设备调整）
     if [[ "$OEM_DEVICE" == *"A311D"* ]]; then
-        gcc_optimizations="-march=armv8-a -mtune=cortex-a73.cortex-a53 -O3 -pipe -fno-plt -fno-fat-lto-objects \
-                          -fno-common -fshort-wchar -funwind-tables -funroll-loops -ftree-vectorize \
-                          -falign-functions=32 -falign-jumps=32 -falign-loops=32 -fstrict-aliasing \
-                          -fno-stack-protector -fno-ident -fomit-frame-pointer -mbranch-target-align=32 \
-                          -fno-PIE -fno-semantic-interposition \
-                          -Wno-unused-but-set-variable -Wno-missing-field-initializers \
-                          -ffunction-sections -fdata-sections"
+        gcc_optimizations="-march=armv8-a -mtune=cortex-a73.cortex-a53 -O3 -pipe -fno-plt \
+                  -fno-common -fshort-wchar -funwind-tables -funroll-loops -ftree-vectorize \
+                  -falign-functions=32 -falign-jumps=32 -falign-loops=32 -fstrict-aliasing \
+                  -fno-stack-protector -fno-ident -fomit-frame-pointer -mbranch-target-align=32 \
+                  -fno-PIE -fno-semantic-interposition \
+                  -Wno-unused-but-set-variable -Wno-missing-field-initializers \
+                  -ffunction-sections -fdata-sections \
+                  -flto=full"  # 添加Thin LTO支持
     else
         # 其他设备的默认选项
         gcc_optimizations="-march=armv8.2-a -mtune=cortex-a73 -O3 -Ofast -pipe ..."
